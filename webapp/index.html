@@ -34,6 +34,7 @@
     .qrbox{background:#fff;border:2px solid #e5e5e5;border-radius:10px;padding:12px;text-align:center}
     .qrbox h3{margin:0 0 10px;font-size:16px;color:#000}
     .qrbox img{max-width:100%;height:auto;display:block;margin:8px auto;border-radius:8px;border:1px solid #e5e5e5;background:#fff}
+    .sent-note{font-size:12px;color:#0a7d4f;margin-top:8px;display:none}
   </style>
 </head>
 <body>
@@ -95,9 +96,9 @@
             <h2>Сессия завершена</h2>
             <p>Ваш лучший результат: <b id="finalBest">0</b> очков.</p>
             <p>Вы выиграли: <b id="prizeText">—</b></p>
+            <p id="sentNote" class="sent-note">Результат отправлен в таблицу ✅</p>
             <div style="margin-top:12px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
               <button id="toReg" class="btn">К регистрации</button>
-              <button id="sendLead" class="btn brand">Отправить в таблицу</button>
             </div>
           </div>
         </div>
@@ -244,9 +245,9 @@
   document.getElementById('newSession').onclick=()=>openReg();
 
   const reg=document.getElementById('regOverlay'), result=document.getElementById('resultOverlay');
-  const startBtn=document.getElementById('startBtn'), openGroupBtn=document.getElementById('openGroup'), toRegBtn=document.getElementById('toReg'), sendLeadBtn=document.getElementById('sendLead');
+  const startBtn=document.getElementById('startBtn'), openGroupBtn=document.getElementById('openGroup'), toRegBtn=document.getElementById('toReg');
   const regErr=document.getElementById('regErr'), lastNameIn=document.getElementById('lastName'), firstNameIn=document.getElementById('firstName'), middleNameIn=document.getElementById('middleName'), phoneIn=document.getElementById('phone'), emailIn=document.getElementById('email'), consentIn=document.getElementById('consent');
-  const finalBest=document.getElementById('finalBest'), prizeText=document.getElementById('prizeText');
+  const finalBest=document.getElementById('finalBest'), prizeText=document.getElementById('prizeText'), sentNote=document.getElementById('sentNote');
 
   let profile=null, sessionEndAt=null, timerId=null;
 
@@ -272,39 +273,43 @@
     countdown(()=>{ hardReset(); tick(); });
   };
 
-  openGroupBtn.onclick=()=>{ try{ tg ? tg.openLink(GROUP_URL,{try_instant_view:false}) : window.open(GROUP_URL,'_blank') }catch(e){} };
+  openGroupBtn.onclick=()=>{ try{ (window.Telegram?.WebApp) ? Telegram.WebApp.openLink(GROUP_URL,{try_instant_view:false}) : window.open(GROUP_URL,'_blank') }catch(e){} };
   toRegBtn.onclick=()=>{ result.style.display='none'; openReg() };
 
-  // отправка в таблицу
+  // отправка в таблицу (авто при окончании сессии)
   async function sendToSheets(payload){
     try{
       const res = await fetch(SHEETS_URL, {
         method: 'POST',
-        headers: { 'Content-Type':'application/json' },
+        headers: { 'Content-Type':'application/json; charset=UTF-8' },
         body: JSON.stringify(payload),
       });
-      // Ответ нам не обязателен, но можно проверить:
-      // const json = await res.json();
-      // if (!json.ok) throw new Error(json.error || 'Sheets error');
+      // В большинстве случаев ответ JSON: { ok:true, appended:true, ... }
+      // Если у вас когда-нибудь будет CORS-блок, можно заменить на:
+      // await fetch(SHEETS_URL, { method:'POST', mode:'no-cors', body: JSON.stringify(payload) });
+      return await res.json().catch(()=> ({}));
     }catch(e){
-      // На GitHub Pages возможны редкие CORS-особенности.
-      // Если нужно — можно заменить на { mode:'no-cors' } и не читать ответ.
-      // fetch(SHEETS_URL, { method:'POST', mode:'no-cors', body: JSON.stringify(payload) });
+      return null;
     }
   }
-
-  sendLeadBtn.onclick=()=>{
-    const payload={ type:'lead', profile, best, ts:Date.now() };
-    sendToSheets(payload);
-    result.style.display='none';
-    openReg();
-  };
 
   function tick(){ clearInterval(timerId); timerId=setInterval(()=>{ const left=Math.max(0,(sessionEndAt||0)-Date.now()); timeEl.textContent=fmt(left); if(left<=0){ clearInterval(timerId); showResults() } },200) }
   function fmt(ms){ const s=Math.ceil(ms/1000), m=Math.floor(s/60), ss=('0'+(s%60)).slice(-2); return ('0'+m).slice(-2)+':'+ss }
   function sessionActive(){ return !!sessionEndAt && Date.now()<sessionEndAt }
 
-  function showResults(){ finalBest.textContent=String(best); prizeText.textContent=getPrize(best); result.style.display='flex' }
+  async function showResults(){
+    finalBest.textContent=String(best);
+    prizeText.textContent=getPrize(best);
+    sentNote.style.display = 'none'; // скрыть до подтверждения
+    result.style.display='flex';
+
+    // авто-отправка
+    const resp = await sendToSheets({ type:'lead', profile, best, ts:Date.now() });
+    if (resp && (resp.ok || resp.appended)) {
+      sentNote.style.display = 'block';
+    }
+  }
+
   function getPrize(p){ if(p>=70)return'Термос'; if(p>=50)return'Шоппер'; if(p>=30)return'Блокнот и ручка'; if(p>=20)return'Брелок'; return '—' }
 
   function countdown(cb){ ready=false; let t=3; (function step(){ drawCountdown(t); if(t===0){ ready=true; cb&&cb(); return } setTimeout(()=>{ t--; step() },500) })() }
