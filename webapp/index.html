@@ -34,7 +34,6 @@
     .qrbox{background:#fff;border:2px solid #e5e5e5;border-radius:10px;padding:12px;text-align:center}
     .qrbox h3{margin:0 0 10px;font-size:16px;color:#000}
     .qrbox img{max-width:100%;height:auto;display:block;margin:8px auto;border-radius:8px;border:1px solid #e5e5e5;background:#fff}
-    .sent-note{font-size:12px;color:#0a7d4f;margin-top:8px;display:none}
   </style>
 </head>
 <body>
@@ -96,9 +95,9 @@
             <h2>Сессия завершена</h2>
             <p>Ваш лучший результат: <b id="finalBest">0</b> очков.</p>
             <p>Вы выиграли: <b id="prizeText">—</b></p>
-            <p id="sentNote" class="sent-note">Результат отправлен в таблицу ✅</p>
             <div style="margin-top:12px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
               <button id="toReg" class="btn">К регистрации</button>
+              <button id="sendLead" class="btn brand">Отправить в таблицу</button>
             </div>
           </div>
         </div>
@@ -111,7 +110,7 @@
   // ========= CONFIG =========
   const ASSETS_BASE = 'assets/';
   const GROUP_URL   = 'https://t.me/proftradelab';
-  // URL веб-приложения Apps Script (обязательно /exec)
+  // Web App URL (обязательно /exec)
   const SHEETS_URL  = 'https://script.google.com/macros/s/AKfycbwflLM7cNOQCkH0_NQ5jBdiT-ScAKBLRJIfBz-o6T3_FE9whAwXbaL2zLUogjJmTnm89Q/exec';
   // ==========================
 
@@ -180,8 +179,8 @@
   }
 
   // физика — плавное падение + двойной прыжок
-  let GRAVITY=0.50, JUMP_V1=-12.2, JUMP_V2=-9.6, J2_WIN=420, J2_MINVY=1.2;
-  const SESSION_LEN=120; let SPEED_START=4.6, TARGET=10.2; let SPEED_ACCEL=(TARGET-SPEED_START)/SESSION_LEN;
+  let GRAVITY=0.45, JUMP_V1=-12.2, JUMP_V2=-9.6, J2_WIN=420, J2_MINVY=1.2;
+  const SESSION_LEN=120; let SPEED_START=4.4, TARGET=10.0; let SPEED_ACCEL=(TARGET-SPEED_START)/SESSION_LEN;
   let SPAWN_MIN=340, SPAWN_VAR=300;
 
   let worldSpeed=SPEED_START, score=0, best=0, ready=false, runStart=Date.now();
@@ -245,9 +244,9 @@
   document.getElementById('newSession').onclick=()=>openReg();
 
   const reg=document.getElementById('regOverlay'), result=document.getElementById('resultOverlay');
-  const startBtn=document.getElementById('startBtn'), openGroupBtn=document.getElementById('openGroup'), toRegBtn=document.getElementById('toReg');
+  const startBtn=document.getElementById('startBtn'), openGroupBtn=document.getElementById('openGroup'), toRegBtn=document.getElementById('toReg'), sendLeadBtn=document.getElementById('sendLead');
   const regErr=document.getElementById('regErr'), lastNameIn=document.getElementById('lastName'), firstNameIn=document.getElementById('firstName'), middleNameIn=document.getElementById('middleName'), phoneIn=document.getElementById('phone'), emailIn=document.getElementById('email'), consentIn=document.getElementById('consent');
-  const finalBest=document.getElementById('finalBest'), prizeText=document.getElementById('prizeText'), sentNote=document.getElementById('sentNote');
+  const finalBest=document.getElementById('finalBest'), prizeText=document.getElementById('prizeText');
 
   let profile=null, sessionEndAt=null, timerId=null;
 
@@ -273,43 +272,48 @@
     countdown(()=>{ hardReset(); tick(); });
   };
 
-  openGroupBtn.onclick=()=>{ try{ (window.Telegram?.WebApp) ? Telegram.WebApp.openLink(GROUP_URL,{try_instant_view:false}) : window.open(GROUP_URL,'_blank') }catch(e){} };
+  openGroupBtn.onclick=()=>{ try{ tg ? tg.openLink(GROUP_URL,{try_instant_view:false}) : window.open(GROUP_URL,'_blank') }catch(e){} };
   toRegBtn.onclick=()=>{ result.style.display='none'; openReg() };
 
-  // отправка в таблицу (авто при окончании сессии)
+  // отправка в таблицу
   async function sendToSheets(payload){
     try{
+      // основной путь с чтением ответа
       const res = await fetch(SHEETS_URL, {
         method: 'POST',
         headers: { 'Content-Type':'application/json; charset=UTF-8' },
         body: JSON.stringify(payload),
       });
-      // В большинстве случаев ответ JSON: { ok:true, appended:true, ... }
-      // Если у вас когда-нибудь будет CORS-блок, можно заменить на:
-      // await fetch(SHEETS_URL, { method:'POST', mode:'no-cors', body: JSON.stringify(payload) });
-      return await res.json().catch(()=> ({}));
+      // опционально можно проверить:
+      // const json = await res.json(); console.log('Sheets:', json);
     }catch(e){
-      return null;
+      // запасной путь (на случай редких CORS-особенностей)
+      try{
+        await fetch(SHEETS_URL, { method:'POST', mode:'no-cors', body: JSON.stringify(payload) });
+      }catch(_){}
     }
+  }
+
+  // ручная отправка с экрана результатов
+  sendLeadBtn.onclick=()=>{ autoSendAndBackToReg(); };
+
+  function autoSendAndBackToReg(){
+    const payload={ type:'lead', profile, best, ts:Date.now() };
+    sendToSheets(payload);
+    result.style.display='none';
+    openReg();
   }
 
   function tick(){ clearInterval(timerId); timerId=setInterval(()=>{ const left=Math.max(0,(sessionEndAt||0)-Date.now()); timeEl.textContent=fmt(left); if(left<=0){ clearInterval(timerId); showResults() } },200) }
   function fmt(ms){ const s=Math.ceil(ms/1000), m=Math.floor(s/60), ss=('0'+(s%60)).slice(-2); return ('0'+m).slice(-2)+':'+ss }
   function sessionActive(){ return !!sessionEndAt && Date.now()<sessionEndAt }
 
-  async function showResults(){
+  function showResults(){
     finalBest.textContent=String(best);
     prizeText.textContent=getPrize(best);
-    sentNote.style.display = 'none'; // скрыть до подтверждения
-    result.style.display='flex';
-
-    // авто-отправка
-    const resp = await sendToSheets({ type:'lead', profile, best, ts:Date.now() });
-    if (resp && (resp.ok || resp.appended)) {
-      sentNote.style.display = 'block';
-    }
+    // авто-отправка результатов
+    autoSendAndBackToReg();
   }
-
   function getPrize(p){ if(p>=70)return'Термос'; if(p>=50)return'Шоппер'; if(p>=30)return'Блокнот и ручка'; if(p>=20)return'Брелок'; return '—' }
 
   function countdown(cb){ ready=false; let t=3; (function step(){ drawCountdown(t); if(t===0){ ready=true; cb&&cb(); return } setTimeout(()=>{ t--; step() },500) })() }
